@@ -7,3 +7,4 @@
 pycycle.egg-info/*
 /build*
 *testflo_report.out
+om_pycycle.egg-info/*
