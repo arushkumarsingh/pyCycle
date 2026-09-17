@@ -8,3 +8,6 @@ pycycle.egg-info/*
 /build*
 *testflo_report.out
 om_pycycle.egg-info/*
+inputs.html
+n2.html
+.openmdao_out

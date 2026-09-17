@@ -246,66 +246,114 @@ def run_turbojet_simulation(use_rde=True, cpr=13.5, fn_target=11800.0, t4_target
     return prob, diagnostics
 
 
-def main():
-    print("=" * 90)
-    print("STEP 6: LOW-CPR ROTATING DETONATION ENGINE (RDE) TURBOJET")
-    print("Design Point: Fn = 11,800 lbf, T4 = 2370 degR, Sea-Level Static")
-    print("=" * 90)
+def viewer(prob, pt, file=sys.stdout):
+    """
+    print a report of all the relevant cycle properties
+    """
 
-    print("\nCase 1: Running Conventional Turbojet (CPR = 13.5, Isobaric Combustor)...")
-    prob_conv, res_conv = run_turbojet_simulation(use_rde=False, cpr=13.5)
+    summary_data = (prob[pt+'.fc.Fl_O:stat:MN'], prob[pt+'.fc.alt'], prob[pt+'.inlet.Fl_O:stat:W'],
+                    prob[pt+'.perf.Fn'], prob[pt+'.perf.Fg'], prob[pt+'.inlet.F_ram'],
+                    prob[pt+'.perf.OPR'], prob[pt+'.perf.TSFC'])
+    summary_data = tuple(float(np.asarray(x).item()) if hasattr(x, 'item') else float(x) for x in summary_data)
 
-    print("Case 2: Running RDE Turbojet (Same CPR = 13.5, RDE Combustor)...")
-    prob_rde13, res_rde13 = run_turbojet_simulation(use_rde=True, cpr=13.5)
+    print(file=file, flush=True)
+    print(file=file, flush=True)
+    print(file=file, flush=True)
+    print("----------------------------------------------------------------------------", file=file, flush=True)
+    print("                              POINT:", pt, file=file, flush=True)
+    print("----------------------------------------------------------------------------", file=file, flush=True)
+    print("                       PERFORMANCE CHARACTERISTICS", file=file, flush=True)
+    print("    Mach      Alt       W      Fn      Fg    Fram     OPR     TSFC  ", file=file, flush=True)
+    print(" %7.5f  %7.1f %7.3f %7.1f %7.1f %7.1f %7.3f  %7.5f" % summary_data, file=file, flush=True)
 
-    print("Case 3: Running Low-CPR RDE Turbojet (Reduced CPR = 8.0, RDE Combustor)...")
-    prob_rde8, res_rde8 = run_turbojet_simulation(use_rde=True, cpr=8.0)
+    fs_names = ['fc.Fl_O', 'inlet.Fl_O', 'comp.Fl_O', 'burner.Fl_O',
+                'turb.Fl_O', 'nozz.Fl_O']
+    fs_full_names = [f'{pt}.{fs}' for fs in fs_names]
+    pyc.print_flow_station(prob, fs_full_names, file=file)
 
-    print("\n" + "=" * 90)
-    print("TURBOMACHINERY & CYCLE COMPARISON TABLE")
-    print("=" * 90)
-    header = (
-        f"{'Metric':<34} "
-        f"{'Conventional (13.5)':>20} "
-        f"{'RDE Turbojet (13.5)':>20} "
-        f"{'Low-CPR RDE (8.0)':>20}"
-    )
-    print(header)
-    print("-" * 90)
+    comp_names = ['comp']
+    comp_full_names = [f'{pt}.{c}' for c in comp_names]
+    pyc.print_compressor(prob, comp_full_names, file=file)
 
-    def fmt(val, unit=""):
-        return f"{val:.2f} {unit}".strip()
+    burner = prob.model._get_subsystem(f'{pt}.burner')
+    if isinstance(burner, RDECombustor):
+        pyc.print_rde(prob, [f'{pt}.burner'], file=file)
+    else:
+        pyc.print_burner(prob, [f'{pt}.burner'], file=file)
 
-    print(f"{'Compressor Pressure Ratio (CPR)':<34} {fmt(res_conv['CPR']):>20} {fmt(res_rde13['CPR']):>20} {fmt(res_rde8['CPR']):>20}")
-    print(f"{'Compressor Power Required (hp)':<34} {fmt(res_conv['Comp_pwr_hp'], 'hp'):>20} {fmt(res_rde13['Comp_pwr_hp'], 'hp'):>20} {fmt(res_rde8['Comp_pwr_hp'], 'hp'):>20}")
-    print(f"{'Combustor Inlet Press (Pt3)':<34} {fmt(res_conv['Pt3_psi'], 'psi'):>20} {fmt(res_rde13['Pt3_psi'], 'psi'):>20} {fmt(res_rde8['Pt3_psi'], 'psi'):>20}")
-    print(f"{'Combustor Exit Press (Pt4)':<34} {fmt(res_conv['Pt4_psi'], 'psi'):>20} {fmt(res_rde13['Pt4_psi'], 'psi'):>20} {fmt(res_rde8['Pt4_psi'], 'psi'):>20}")
-    print(f"{'Combustor Pressure Ratio (Pt4/Pt3)':<34} {res_conv['PR_burner']:>20.3f} {res_rde13['PR_burner']:>20.3f} {res_rde8['PR_burner']:>20.3f}")
-    print(f"{'Turbine Inlet Temp (Tt4)':<34} {fmt(res_conv['Tt4_degR'], 'R'):>20} {fmt(res_rde13['Tt4_degR'], 'R'):>20} {fmt(res_rde8['Tt4_degR'], 'R'):>20}")
-    print(f"{'Turbine Expansion Ratio (PR)':<34} {res_conv['Turb_PR']:>20.3f} {res_rde13['Turb_PR']:>20.3f} {res_rde8['Turb_PR']:>20.3f}")
-    print(f"{'Nozzle Inlet Total Press (Pt5)':<34} {fmt(res_conv['Pt5_psi'], 'psi'):>20} {fmt(res_rde13['Pt5_psi'], 'psi'):>20} {fmt(res_rde8['Pt5_psi'], 'psi'):>20}")
-    print(f"{'Core Airflow Required (W)':<34} {fmt(res_conv['W_air'], 'lb/s'):>20} {fmt(res_rde13['W_air'], 'lb/s'):>20} {fmt(res_rde8['W_air'], 'lb/s'):>20}")
-    print(f"{'Fuel Mass Flow Rate (Wfuel)':<34} {fmt(res_conv['W_fuel'], 'lb/s'):>20} {fmt(res_rde13['W_fuel'], 'lb/s'):>20} {fmt(res_rde8['W_fuel'], 'lb/s'):>20}")
-    print(f"{'Net Thrust (Fn)':<34} {fmt(res_conv['Fn_lbf'], 'lbf'):>20} {fmt(res_rde13['Fn_lbf'], 'lbf'):>20} {fmt(res_rde8['Fn_lbf'], 'lbf'):>20}")
-    print(f"{'TSFC [lbm/(h*lbf)]':<34} {res_conv['TSFC']:>20.5f} {res_rde13['TSFC']:>20.5f} {res_rde8['TSFC']:>20.5f}")
+    turb_names = ['turb']
+    turb_full_names = [f'{pt}.{t}' for t in turb_names]
+    pyc.print_turbine(prob, turb_full_names, file=file)
 
-    d_tsfc_13 = ((res_rde13['TSFC'] - res_conv['TSFC']) / res_conv['TSFC']) * 100.0
-    d_tsfc_8 = ((res_rde8['TSFC'] - res_conv['TSFC']) / res_conv['TSFC']) * 100.0
-    print(f"{'TSFC Improvement vs. Baseline':<34} {'Baseline':>20} {d_tsfc_13:>19.2f}% {d_tsfc_8:>19.2f}%")
-    print(f"{'Nozzle Throat Area (A*)':<34} {fmt(res_conv['Throat_area_in2'], 'in2'):>20} {fmt(res_rde13['Throat_area_in2'], 'in2'):>20} {fmt(res_rde8['Throat_area_in2'], 'in2'):>20}")
-    print("-" * 90)
+    noz_names = ['nozz']
+    noz_full_names = [f'{pt}.{n}' for n in noz_names]
+    pyc.print_nozzle(prob, noz_full_names, file=file)
 
-    print("\nRDE Combustor Diagnostics (Case 2 / Case 3):")
-    print(f"  Detonation Velocity (D_cj)   : {res_rde13['D_cj']:.1f} ft/s  |  {res_rde8['D_cj']:.1f} ft/s")
-    print(f"  Rotation Frequency (f_rde)   : {res_rde13['f_rde']:.1f} Hz    |  {res_rde8['f_rde']:.1f} Hz")
-    print(f"  Injector Feed Margin (Pt_inj): {res_rde13['Pt_inj']:.2f} psi    |  {res_rde8['Pt_inj']:.2f} psi")
+    shaft_names = ['shaft']
+    shaft_full_names = [f'{pt}.{s}' for s in shaft_names]
+    pyc.print_shaft(prob, shaft_full_names, file=file)
 
-    print("\nEngineering Significance:")
-    print("1. RDE at CPR=13.5 cuts TSFC significantly while raising nozzle expansion pressure (Pt5 = 100 psi vs 50 psi).")
-    print("2. The Low-CPR RDE (CPR=8.0) cuts compressor power demand by over 30%, meaning fewer compressor and turbine")
-    print("   stages (lower engine weight, part count, and cost) while still delivering superior TSFC to the 13.5:1 conventional engine!")
-    print("=" * 90 + "\n")
+    pyc.print_balances(prob, pt, file=file)
+
+
+def map_plots(prob, pt):
+    comp_names = ['comp']
+    comp_full_names = [f'{pt}.{c}' for c in comp_names]
+    pyc.plot_compressor_maps(prob, comp_full_names)
+
+    turb_names = ['turb']
+    turb_full_names = [f'{pt}.{c}' for c in turb_names]
+    pyc.plot_turbine_maps(prob, turb_full_names)
+
+
+RDETurbojet = HybridTurbojet
+MPRDETurbojet = MPHybridTurbojet
 
 
 if __name__ == "__main__":
-    main()
+
+    import time
+
+    prob = om.Problem()
+
+    mp_turbojet = prob.model = MPHybridTurbojet(use_rde=True)
+
+    prob.setup(check=False)
+
+    # Define the design point
+    prob.set_val('DESIGN.fc.alt', 0.0, units='ft')
+    prob.set_val('DESIGN.fc.MN', 0.000001)
+    prob.set_val('DESIGN.balance.Fn_target', 11800.0, units='lbf')
+    prob.set_val('DESIGN.balance.T4_target', 2370.0, units='degR')
+    prob.set_val('DESIGN.comp.PR', 13.5)
+    prob.set_val('DESIGN.comp.eff', 0.83)
+    prob.set_val('DESIGN.turb.eff', 0.86)
+
+    # Set initial guesses for balances
+    prob['DESIGN.balance.FAR'] = 0.01755
+    prob['DESIGN.balance.W'] = 125.0
+    prob['DESIGN.balance.turb_PR'] = 4.20
+    prob['DESIGN.fc.balance.Pt'] = 14.696
+    prob['DESIGN.fc.balance.Tt'] = 518.67
+
+    for i, pt in enumerate(mp_turbojet.od_pts):
+        # initial guesses
+        prob[pt + '.balance.W'] = 120.0
+        prob[pt + '.balance.FAR'] = 0.01680
+        prob[pt + '.balance.Nmech'] = 8197.38
+        prob[pt + '.fc.balance.Pt'] = 15.703
+        prob[pt + '.fc.balance.Tt'] = 558.31
+        prob[pt + '.turb.PR'] = 4.6690
+
+    st = time.time()
+
+    prob.set_solver_print(level=-1)
+    prob.set_solver_print(level=2, depth=1)
+
+    prob.run_model()
+
+    for pt in ['DESIGN'] + mp_turbojet.od_pts:
+        viewer(prob, pt)
+
+    print()
+    print("time", time.time() - st)

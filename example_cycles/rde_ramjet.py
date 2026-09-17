@@ -165,54 +165,91 @@ def run_ramjet_case(use_rde=True, far_val=0.028, alt_ft=40000.0, mach=2.5, w_air
     return prob, diagnostics
 
 
-def main():
-    print("=" * 85)
-    print("STEP 5: AIR-BREATHING ROTATING DETONATION ENGINE (RDE) RAMJET")
-    print("Flight Condition: Mach 2.50 at 40,000 ft (Inlet Airflow = 100 lbm/s, FAR = 0.028)")
-    print("=" * 85)
+def viewer(prob, pt, file=sys.stdout):
+    """
+    print a report of all the relevant cycle properties
+    """
 
-    print("\n1. Running Conventional Isobaric Ramjet (Brayton Cycle)...")
-    prob_brayton, res_brayton = run_ramjet_case(use_rde=False, far_val=0.028)
+    summary_data = (prob[pt+'.fc.Fl_O:stat:MN'], prob[pt+'.fc.alt'], prob[pt+'.inlet.Fl_O:stat:W'],
+                    prob[pt+'.perf.Fn'], prob[pt+'.perf.Fg'], prob[pt+'.inlet.F_ram'],
+                    prob[pt+'.perf.OPR'], prob[pt+'.perf.TSFC'])
+    summary_data = tuple(float(np.asarray(x).item()) if hasattr(x, 'item') else float(x) for x in summary_data)
 
-    print("2. Running Rotating Detonation Engine Ramjet (Humphrey/CJ Cycle)...")
-    prob_rde, res_rde = run_ramjet_case(use_rde=True, far_val=0.028)
+    print(file=file, flush=True)
+    print(file=file, flush=True)
+    print(file=file, flush=True)
+    print("----------------------------------------------------------------------------", file=file, flush=True)
+    print("                              POINT:", pt, file=file, flush=True)
+    print("----------------------------------------------------------------------------", file=file, flush=True)
+    print("                       PERFORMANCE CHARACTERISTICS", file=file, flush=True)
+    print("    Mach      Alt       W      Fn      Fg    Fram     OPR     TSFC  ", file=file, flush=True)
+    print(" %7.5f  %7.1f %7.3f %7.1f %7.1f %7.1f %7.3f  %7.5f" % summary_data, file=file, flush=True)
 
-    print("\n" + "=" * 85)
-    print("PERFORMANCE COMPARISON: CONVENTIONAL RAMJET vs. RDE RAMJET")
-    print("=" * 85)
-    print(f"{'Metric':<36} {'Conventional':>18} {'RDE Ramjet':>18} {'Delta (%)':>10}")
-    print("-" * 85)
+    fs_names = ['fc.Fl_O', 'inlet.Fl_O', 'burner.Fl_O', 'nozz.Fl_O']
+    fs_full_names = [f'{pt}.{fs}' for fs in fs_names]
+    pyc.print_flow_station(prob, fs_full_names, file=file)
 
-    delta_fn = ((res_rde['F_n'] - res_brayton['F_n']) / res_brayton['F_n']) * 100.0
-    delta_tsfc = ((res_rde['TSFC'] - res_brayton['TSFC']) / res_brayton['TSFC']) * 100.0
-    delta_isp = ((res_rde['Isp_s'] - res_brayton['Isp_s']) / res_brayton['Isp_s']) * 100.0
-    delta_pt4 = ((res_rde['Pt4_psi'] - res_brayton['Pt4_psi']) / res_brayton['Pt4_psi']) * 100.0
+    burner = prob.model._get_subsystem(f'{pt}.burner')
+    if isinstance(burner, RDECombustor):
+        pyc.print_rde(prob, [f'{pt}.burner'], file=file)
+    else:
+        pyc.print_burner(prob, [f'{pt}.burner'], file=file)
 
-    print(f"{'Inlet Recovery Total Press (Pt2)':<36} {res_brayton['Pt2_psi']:>15.2f} psi {res_rde['Pt2_psi']:>15.2f} psi {'--':>10}")
-    print(f"{'Combustor Exit Total Press (Pt4)':<36} {res_brayton['Pt4_psi']:>15.2f} psi {res_rde['Pt4_psi']:>15.2f} psi {delta_pt4:>+9.1f}%")
-    print(f"{'Combustor Pressure Ratio (Pt4/Pt2)':<36} {res_brayton['PR_burner']:>18.3f} {res_rde['PR_burner']:>18.3f} {'--':>10}")
-    print(f"{'Combustor Exit Total Temp (Tt4)':<36} {res_brayton['Tt4_degR']:>14.1f} degR {res_rde['Tt4_degR']:>14.1f} degR {'--':>10}")
-    print(f"{'Fuel Mass Flow Rate (Wfuel)':<36} {res_brayton['W_fuel']:>15.3f} lb/s {res_rde['W_fuel']:>15.3f} lb/s {'--':>10}")
-    print(f"{'Inlet Ram Drag (Fram)':<36} {res_brayton['F_ram']:>15.1f} lbf {res_rde['F_ram']:>15.1f} lbf {'--':>10}")
-    print(f"{'Nozzle Gross Thrust (Fg)':<36} {res_brayton['F_g']:>15.1f} lbf {res_rde['F_g']:>15.1f} lbf {((res_rde['F_g']-res_brayton['F_g'])/res_brayton['F_g'])*100:>+9.1f}%")
-    print(f"{'Net Thrust (Fn = Fg - Fram)':<36} {res_brayton['F_n']:>15.1f} lbf {res_rde['F_n']:>15.1f} lbf {delta_fn:>+9.1f}%")
-    print(f"{'Specific Impulse (Isp)':<36} {res_brayton['Isp_s']:>16.1f} s {res_rde['Isp_s']:>16.1f} s {delta_isp:>+9.1f}%")
-    print(f"{'Thrust Specific Fuel Consumption':<36} {res_brayton['TSFC']:>10.4f} lb/h/lbf {res_rde['TSFC']:>10.4f} lb/h/lbf {delta_tsfc:>+9.1f}%")
-    print(f"{'Nozzle Throat Area (A*)':<36} {res_brayton['Throat_area_in2']:>15.2f} in^2 {res_rde['Throat_area_in2']:>15.2f} in^2 {'--':>10}")
-    print(f"{'Nozzle Exit Area (Ae)':<36} {res_brayton['Exit_area_in2']:>15.2f} in^2 {res_rde['Exit_area_in2']:>15.2f} in^2 {'--':>10}")
-    print("-" * 85)
+    noz_names = ['nozz']
+    noz_full_names = [f'{pt}.{n}' for n in noz_names]
+    pyc.print_nozzle(prob, noz_full_names, file=file)
 
-    print("\nRDE Wave Diagnostics:")
-    print(f"  Detonation Wave Speed (D_cj)   : {res_rde['D_cj']:.1f} ft/s  ({res_rde['D_cj']*0.3048:.1f} m/s)")
-    print(f"  Detonation Rotation Frequency  : {res_rde['f_rde']:.1f} Hz  ({res_rde['f_rde']/1000.0:.2f} kHz)")
-    print(f"  Injector Plenum Pressure       : {res_rde['Pt_inj']:.2f} psi")
+    pyc.print_balances(prob, pt, file=file)
 
-    print("\nKey Takeaways:")
-    print("1. Detonation-based heat addition yields a substantial stagnation pressure rise (Pt4/Pt2 = 1.63 vs 0.95).")
-    print("2. At identical flight conditions and fuel flow, the RDE produces higher nozzle expansion pressure,")
-    print("   increasing net thrust and specific impulse (Isp) while lowering TSFC.")
-    print("=" * 85 + "\n")
+
+class MPRDERamjet(pyc.MPCycle):
+
+    def setup(self):
+        self.pyc_add_pnt('DESIGN', RamjetCycle(use_rde=True, fuel_type='FAR'))
+
+        self.set_input_defaults('DESIGN.inlet.MN', 0.35)
+        self.set_input_defaults('DESIGN.burner.MN', 0.30)
+        self.set_input_defaults('DESIGN.inlet.Fl_I:stat:W', 100.0, units='lbm/s')
+        self.set_input_defaults('DESIGN.burner.Fl_I:FAR', 0.028)
+        self.set_input_defaults('DESIGN.inlet.ram_recovery', 0.90)
+
+        self.pyc_add_cycle_param('burner.dPqP_inj', 0.12)
+        self.pyc_add_cycle_param('burner.eta_rde', 0.85)
+        self.pyc_add_cycle_param('burner.dia_annulus', 14.0)
+        self.pyc_add_cycle_param('burner.N_waves', 1.0)
+        self.pyc_add_cycle_param('nozz.Cv', 0.98)
+
+        self.od_pts = []
+
+        super().setup()
+
+
+RDERamjet = RamjetCycle
 
 
 if __name__ == "__main__":
-    main()
+
+    import time
+
+    prob = om.Problem()
+
+    mp_ramjet = prob.model = MPRDERamjet()
+
+    prob.setup(check=False)
+
+    # Define the design point
+    prob.set_val('DESIGN.fc.alt', 40000.0, units='ft')
+    prob.set_val('DESIGN.fc.MN', 2.50)
+
+    st = time.time()
+
+    prob.set_solver_print(level=-1)
+    prob.set_solver_print(level=2, depth=1)
+
+    prob.run_model()
+
+    for pt in ['DESIGN'] + mp_ramjet.od_pts:
+        viewer(prob, pt)
+
+    print()
+    print("time", time.time() - st)
