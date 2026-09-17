@@ -199,8 +199,6 @@ def viewer(prob, pt, file=sys.stdout):
     noz_full_names = [f'{pt}.{n}' for n in noz_names]
     pyc.print_nozzle(prob, noz_full_names, file=file)
 
-    pyc.print_balances(prob, pt, file=file)
-
 
 class MPRDERamjet(pyc.MPCycle):
 
