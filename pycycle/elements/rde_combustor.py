@@ -9,6 +9,7 @@ Implements the pressure-gain combustion physics of an RDE, including:
 5. Integration with pyCycle Element API (ThermoAdd + Thermo)
 """
 
+import sys
 import numpy as np
 import openmdao.api as om
 
@@ -160,7 +161,6 @@ class RDEPressureGainComp(om.ExplicitComponent):
         J['PR_RDE', 'eta_rde'] = u_inj * pi_ideal_minus_1
 
         # Derivatives of pi_ideal_minus_1:
-        # dq/dFAR
         dq_dfar = q_fuel / (1.0 + far)**2
         dpi_dfar = (gamma - 1.0) * dq_dfar / (r_gas * tt_in)
         dpi_dtt = - (gamma - 1.0) * q / (r_gas * tt_in**2)
@@ -200,7 +200,6 @@ class RDEPressureGainComp(om.ExplicitComponent):
         dm_dxi = 0.5 / sqrt_1_xi + 0.5 / sqrt_xi
 
         # d(xi) derivatives:
-        # xi = ((gamma - 1/gamma) * q_mech) / (2.0 * r_mech * tt_in)
         dxi_dq = (gamma**2 - 1.0) * conv_factor / (2.0 * gamma * r_mech * tt_in)
         dxi_dfar = dxi_dq * dq_dfar
         dxi_dqfuel = dxi_dq * (far / (1.0 + far))
@@ -213,7 +212,7 @@ class RDEPressureGainComp(om.ExplicitComponent):
         da_dgamma = 0.5 * a_inj / gamma
         da_dmw = -0.5 * a_inj / mw
 
-        # d(D_cj) = dm_cj * a_inj + m_cj * da_inj
+        # d(D_cj)
         J['D_cj', 'FAR'] = (dm_dxi * dxi_dfar) * a_inj
         J['D_cj', 'Q_fuel'] = (dm_dxi * dxi_dqfuel) * a_inj
         J['D_cj', 'Tt_in'] = (dm_dxi * dxi_dtt) * a_inj + m_cj * da_dtt
@@ -232,3 +231,209 @@ class RDEPressureGainComp(om.ExplicitComponent):
         J['f_rde', 'MW_gas'] = scale * J['D_cj', 'MW_gas']
         J['f_rde', 'dia_annulus'] = - (n_waves * d_cj) / (np.pi * (dia_ft**2) * 12.0)
         J['f_rde', 'N_waves'] = d_cj / circ
+
+
+class RDECombustor(Element):
+    """
+    Rotating Detonation Engine (RDE) Combustor Element for pyCycle.
+
+    Replaces conventional isobaric combustors with pressure-gain detonation combustion.
+
+    --------------
+    Flow Stations
+    --------------
+    Fl_I: Inlet flow from compressor/diffuser (Station 3)
+    Fl_O: Stagnation and static flow exit with pressure gain (Station 4)
+
+    -------------
+    Design Inputs
+    -------------
+        Fl_I:FAR        : Fuel to air ratio
+        dPqP_inj        : Injector feed pressure loss fraction (default: 0.12)
+        eta_rde         : Detonation realization efficiency (default: 0.85)
+        dia_annulus     : Mean diameter of annulus [inch]
+        MN              : Exit Mach number (design static calculation)
+
+    -------------
+    Off-Design Inputs
+    -------------
+        Fl_I:FAR        : Fuel to air ratio
+        dPqP_inj        : Injector feed pressure loss fraction
+        eta_rde         : Detonation realization efficiency
+        area            : Combustor exit area (off-design matching)
+
+    -------------
+    Outputs
+    -------------
+        Wfuel           : Fuel mass flow rate [lbm/s]
+        PR_RDE          : Net combustor stagnation pressure ratio (Pt4 / Pt3)
+        Pt_inj          : Injector plenum total pressure [psi]
+        D_cj            : Detonation wave speed [ft/s]
+        f_rde           : Detonation rotation frequency [Hz]
+    """
+
+    def initialize(self):
+        self.options.declare('statics', default=True,
+                             desc='If True, calculate static properties.')
+        self.options.declare('fuel_type', default="JP-7",
+                             desc='Type of fuel.')
+        self.options.declare('detonation_mode', default='HUMPHREY', values=['HUMPHREY', 'CJ'],
+                             desc='Thermodynamic mode for detonation calculation')
+        self.options.declare('dia_annulus', default=12.0,
+                             desc='Mean diameter of RDE annulus [inch]')
+
+        self.default_des_od_conns = [
+            ('Fl_O:stat:area', 'area')
+        ]
+
+        super().initialize()
+
+    def pyc_setup_output_ports(self):
+        thermo_method = self.options['thermo_method']
+        thermo_data = self.options['thermo_data']
+        fuel_type = self.options['fuel_type']
+
+        self.thermo_add_comp = ThermoAdd(
+            method=thermo_method,
+            mix_mode='reactant',
+            thermo_kwargs={
+                'spec': thermo_data,
+                'inflow_composition': self.Fl_I_data['Fl_I'],
+                'mix_composition': fuel_type
+            }
+        )
+
+        self.copy_flow(self.thermo_add_comp, 'Fl_O')
+
+    def setup(self):
+        thermo_method = self.options['thermo_method']
+        thermo_data = self.options['thermo_data']
+        design = self.options['design']
+        statics = self.options['statics']
+        air_fuel_composition = self.Fl_O_data['Fl_O']
+        det_mode = self.options['detonation_mode']
+
+        # 1. Inlet flow station
+        in_flow = FlowIn(fl_name='Fl_I')
+        self.add_subsystem('in_flow', in_flow, promotes=['Fl_I:tot:*', 'Fl_I:stat:*'])
+
+        # 2. Fuel mixing (ThermoAdd)
+        self.add_subsystem(
+            'mix_fuel',
+            self.thermo_add_comp,
+            promotes=[
+                'Fl_I:stat:W',
+                ('mix:ratio', 'Fl_I:FAR'),
+                'Fl_I:tot:composition',
+                'Fl_I:tot:h',
+                ('mix:W', 'Wfuel'),
+                'Wout'
+            ]
+        )
+
+        # 3. RDE Detonation Pressure Gain Component
+        rde_pg = RDEPressureGainComp(detonation_mode=det_mode)
+        prom_pg_in = [
+            'dPqP_inj', 'eta_rde', 'Q_fuel', 'gamma_gas',
+            'MW_gas', 'dia_annulus', 'N_waves'
+        ]
+        prom_pg_out = ['PR_RDE', 'Pt_inj', 'D_cj', 'f_rde']
+        self.add_subsystem('rde_press_gain', rde_pg,
+                           promotes_inputs=prom_pg_in,
+                           promotes_outputs=prom_pg_out)
+
+        self.connect('Fl_I:tot:P', 'rde_press_gain.Pt_in')
+        self.connect('Fl_I:tot:T', 'rde_press_gain.Tt_in')
+        self.connect('Fl_I:FAR', 'rde_press_gain.FAR')
+
+        # 4. Vitiated flow station (Thermo total_hP at elevated pressure Pt_out)
+        vit_flow = Thermo(
+            mode='total_hP',
+            fl_name='Fl_O:tot',
+            method=thermo_method,
+            thermo_kwargs={
+                'composition': air_fuel_composition,
+                'spec': thermo_data
+            }
+        )
+        self.add_subsystem('vitiated_flow', vit_flow, promotes_outputs=['Fl_O:*'])
+        self.connect('mix_fuel.mass_avg_h', 'vitiated_flow.h')
+        self.connect('mix_fuel.composition_out', 'vitiated_flow.composition')
+        self.connect('rde_press_gain.Pt_out', 'vitiated_flow.P')
+
+        # 5. Static flow station properties
+        if statics:
+            if design:
+                out_stat = Thermo(
+                    mode='static_MN',
+                    fl_name='Fl_O:stat',
+                    method=thermo_method,
+                    thermo_kwargs={
+                        'composition': air_fuel_composition,
+                        'spec': thermo_data
+                    }
+                )
+                self.add_subsystem('out_stat', out_stat,
+                                   promotes_inputs=['MN'],
+                                   promotes_outputs=['Fl_O:stat:*'])
+                self.connect('mix_fuel.composition_out', 'out_stat.composition')
+                self.connect('Fl_O:tot:S', 'out_stat.S')
+                self.connect('Fl_O:tot:h', 'out_stat.ht')
+                self.connect('Fl_O:tot:P', 'out_stat.guess:Pt')
+                self.connect('Fl_O:tot:gamma', 'out_stat.guess:gamt')
+                self.connect('Wout', 'out_stat.W')
+
+            else:
+                out_stat = Thermo(
+                    mode='static_A',
+                    fl_name='Fl_O:stat',
+                    method=thermo_method,
+                    thermo_kwargs={
+                        'composition': air_fuel_composition,
+                        'spec': thermo_data
+                    }
+                )
+                self.add_subsystem('out_stat', out_stat,
+                                   promotes_inputs=['area'],
+                                   promotes_outputs=['Fl_O:stat:*'])
+                self.connect('mix_fuel.composition_out', 'out_stat.composition')
+                self.connect('Fl_O:tot:S', 'out_stat.S')
+                self.connect('Fl_O:tot:h', 'out_stat.ht')
+                self.connect('Fl_O:tot:P', 'out_stat.guess:Pt')
+                self.connect('Fl_O:tot:gamma', 'out_stat.guess:gamt')
+                self.connect('Wout', 'out_stat.W')
+
+        else:
+            self.add_subsystem('W_passthru',
+                               PassThrough('Wout', 'Fl_O:stat:W', 1.0, units='lbm/s'),
+                               promotes=['*'])
+
+        super().setup()
+
+
+def print_rde(prob, element_names, file=sys.stdout):
+    """
+    Convenience viewer for RDE Combustor diagnostic properties.
+    """
+    len_header = 23 + 7 * 13
+    print("-" * len_header, file=file, flush=True)
+    print("                            RDE COMBUSTOR PROPERTIES", file=file, flush=True)
+    print("-" * len_header, file=file, flush=True)
+
+    line_tmpl = '{:<20}|  ' + '{:>13}' * 7
+    print(line_tmpl.format('RDE Element', 'PtIn(psi)', 'PtInj(psi)', 'PtOut(psi)', 'PR_RDE', 'TtOut(degR)', 'D_cj(m/s)', 'f_rde(Hz)'),
+          file=file, flush=True)
+
+    line_tmpl_data = '{:<20}|  {:13.2f}{:13.2f}{:13.2f}{:13.4f}{:13.2f}{:13.1f}{:13.1f}'
+    for e_name in element_names:
+        pt_in = prob.get_val(f'{e_name}.rde_press_gain.Pt_in', units='psi')[0]
+        pt_inj = prob.get_val(f'{e_name}.Pt_inj', units='psi')[0]
+        pt_out = prob.get_val(f'{e_name}.Fl_O:tot:P', units='psi')[0]
+        pr_rde = prob.get_val(f'{e_name}.PR_RDE')[0]
+        tt_out = prob.get_val(f'{e_name}.Fl_O:tot:T', units='degR')[0]
+        d_cj = prob.get_val(f'{e_name}.D_cj', units='ft/s')[0] * 0.3048
+        f_rde = prob.get_val(f'{e_name}.f_rde', units='Hz')[0]
+
+        print(line_tmpl_data.format(e_name, pt_in, pt_inj, pt_out, pr_rde, tt_out, d_cj, f_rde),
+              file=file, flush=True)
+    print("-" * len_header, file=file, flush=True)
